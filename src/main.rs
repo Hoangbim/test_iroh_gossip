@@ -393,6 +393,12 @@ impl GossipNode {
 
         let gossip = Gossip::builder().spawn(endpoint.clone());
 
+        // if !matches!(relay_mode, RelayMode::Disabled) {
+        // if we are expecting a relay, wait until we get a home relay
+        // before moving on
+        endpoint.online().await;
+        // }
+
         let _router = Router::builder(endpoint.clone())
             .accept(iroh_gossip::net::GOSSIP_ALPN, gossip.clone())
             .spawn();
@@ -668,6 +674,12 @@ async fn main() -> Result<()> {
                             "my-stream".to_string(),
                             frame_num,
                             vec![42u8; 100]
+                        );
+
+                        println!(
+                            "> [Ingest] Received frame: stream={}, frame={}",
+                            frame.stream_id,
+                            frame.frame_num
                         );
 
                         if let Err(e) = service.send_frame("my-stream", frame).await {
