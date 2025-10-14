@@ -17,6 +17,8 @@ use serde::{ Deserialize, Serialize };
 
 use iroh_gossip::net::GOSSIP_ALPN;
 
+mod gossip_node;
+
 /// Chat over iroh-gossip
 ///
 /// This broadcasts unsigned messages over iroh-gossip.

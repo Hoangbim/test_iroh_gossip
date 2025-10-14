@@ -20,4 +20,7 @@ snafu = { version = "0.8.5" }
 blake3 = "1.8.2"
 async-broadcast = "0.7.2"
 
+[[bin]]
+name = "gossip_node"
+path = "src/gossip_node.rs"
 

@@ -152,7 +152,7 @@ impl GossipNode {
             .map(|p| p.node_id)
             .collect();
         println!("> [GossipNode] start subscription: {:?}", node_ids);
-        let (sender, _receiver) = self.gossip.subscribe_and_join(topic, node_ids).await?.split();
+        let (sender, _receiver) = self.gossip.subscribe(topic, node_ids).await?.split();
         println!("> [GossipNode] Connected to gossip topic: {}", topic);
 
         // Spawn task để handle incoming messages từ peers
@@ -183,7 +183,7 @@ impl GossipNode {
 
         let node_ids = vec![publisher_node.node_id];
 
-        let (_, receiver) = self.gossip.subscribe_and_join(topic, node_ids).await?.split();
+        let (_, receiver) = self.gossip.subscribe(topic, node_ids).await?.split();
 
         // Create broadcast channel
         let (tx, rx) = broadcast::<MediaFrame>(100);
