@@ -104,7 +104,11 @@ async fn main() -> Result<()> {
     println!("> our node id: {}", endpoint.node_id());
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
-    let router = Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone()).spawn();
+    if !matches!(relay_mode, RelayMode::Disabled) {
+        // if we are expecting a relay, wait until we get a home relay
+        // before moving on
+        endpoint.online().await;
+    }
 
     // print a ticket that includes our own node id and endpoint addresses
     let ticket = {
@@ -114,6 +118,8 @@ async fn main() -> Result<()> {
     };
     println!("> ticket to join us: {ticket}");
 
+    let router = Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone()).spawn();
+
     // join the gossip topic by connecting to known nodes, if any
     let node_ids = nodes
         .iter()
@@ -122,17 +128,6 @@ async fn main() -> Result<()> {
     if nodes.is_empty() {
         println!("> waiting for nodes to join us...");
     } else {
-        // println!("> trying to connect to {} nodes...", nodes.len());
-        // // add the peer addrs from the ticket to our endpoint's addressbook so that they can be dialed
-        // for node in nodes.into_iter() {
-        //     // endpoint.add_node_addr_with_source(node, "app")?;
-        //     match endpoint.connect(node.node_id, iroh_gossip::ALPN).await {
-        //         Ok(_) => println!("> Successfully connected to node {}", node.node_id.fmt_short()),
-        //         Err(err) =>
-        //             println!("> Failed to connect to node {}: {:?}", node.node_id.fmt_short(), err),
-        //     }
-        // }
-
         println!("> trying to connect to {} peers...", nodes.len());
         // add the peer addrs from the ticket to our endpoint's addressbook so that they can be dialed
         for node in nodes.into_iter() {
