@@ -12,7 +12,14 @@ use iroh::{
 };
 use iroh_gossip::{ api::{ Event, GossipReceiver, GossipSender }, net::Gossip, proto::TopicId };
 use serde::{ Deserialize, Serialize };
-use tokio::sync::{ broadcast, mpsc, RwLock };
+use tokio::sync::{ mpsc, RwLock };
+use async_broadcast::{
+    broadcast,
+    InactiveReceiver,
+    Receiver as BroadcastReceiver,
+    Sender as BroadcastSender,
+};
+use clap::Parser;
 
 // ============================================================================
 // MEDIA FRAME
@@ -59,13 +66,21 @@ pub struct GossipNode {
     endpoint: Endpoint,
     gossip: Gossip,
     stream_topics: Arc<RwLock<HashMap<String, TopicId>>>,
-    active_subscriptions: Arc<RwLock<HashMap<TopicId, broadcast::Sender<MediaFrame>>>>,
+    active_subscriptions: Arc<RwLock<HashMap<TopicId, InactiveReceiver<MediaFrame>>>>,
     static_provider: StaticProvider,
 }
 
 impl GossipNode {
     pub async fn new(secret_key: SecretKey, bind_port: u16) -> Result<Self> {
         let static_provider = StaticProvider::new();
+
+        //     // let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+        //     let endpoint = Endpoint::builder()
+        //         .secret_key(secret_key)
+        //         .add_discovery(static_provider.clone())
+        //         .relay_mode(relay_mode.clone())
+        //         .bind_addr_v4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.bind_port))
+        //         .bind().await?;
 
         let endpoint = Endpoint::builder()
             .secret_key(secret_key)
@@ -75,6 +90,12 @@ impl GossipNode {
             .bind().await?;
 
         let gossip = Gossip::builder().spawn(endpoint.clone());
+
+        // if !matches!(relay_mode, RelayMode::Disabled) {
+        // if we are expecting a relay, wait until we get a home relay
+        // before moving on
+        endpoint.online().await;
+        // }
 
         let _router = Router::builder(endpoint.clone())
             .accept(iroh_gossip::net::GOSSIP_ALPN, gossip.clone())
@@ -130,11 +151,12 @@ impl GossipNode {
             .iter()
             .map(|p| p.node_id)
             .collect();
-
-        let (sender, receiver) = self.gossip.subscribe_and_join(topic, node_ids).await?.split();
+        println!("> [GossipNode] start subscription: {:?}", node_ids);
+        let (sender, _receiver) = self.gossip.subscribe_and_join(topic, node_ids).await?.split();
+        println!("> [GossipNode] Connected to gossip topic: {}", topic);
 
         // Spawn task để handle incoming messages từ peers
-        self.spawn_gossip_receiver(topic, receiver).await;
+        // self.spawn_gossip_receiver(topic, receiver).await;
 
         println!("> [GossipNode] Publisher joined topic: {}", topic);
         Ok(sender)
@@ -145,14 +167,14 @@ impl GossipNode {
         &self,
         stream_id: &str,
         publisher_node: NodeAddr
-    ) -> Result<broadcast::Receiver<MediaFrame>> {
+    ) -> Result<BroadcastReceiver<MediaFrame>> {
         let topic = self.get_or_create_topic(stream_id).await;
 
         // Check if already subscribed
         {
             let subs = self.active_subscriptions.read().await;
-            if let Some(tx) = subs.get(&topic) {
-                return Ok(tx.subscribe());
+            if let Some(inactive_receiver) = subs.get(&topic) {
+                return Ok(inactive_receiver.activate_cloned());
             }
         }
 
@@ -161,18 +183,17 @@ impl GossipNode {
 
         let node_ids = vec![publisher_node.node_id];
 
-        let (sender, receiver) = self.gossip.subscribe_and_join(topic, node_ids).await?.split();
+        let (_, receiver) = self.gossip.subscribe_and_join(topic, node_ids).await?.split();
 
         // Create broadcast channel
-        let (tx, rx) = broadcast::channel(100);
+        let (tx, rx) = broadcast::<MediaFrame>(100);
 
         // Register subscription
         {
             let mut subs = self.active_subscriptions.write().await;
-            subs.insert(topic, tx.clone());
+            subs.insert(topic, rx.clone().deactivate());
         }
 
-        // Spawn task để forward gossip events tới broadcast channel
         let tx_clone = tx.clone();
         tokio::spawn(async move {
             Self::gossip_receiver_loop(receiver, tx_clone).await;
@@ -182,13 +203,13 @@ impl GossipNode {
         Ok(rx)
     }
 
-    /// Publish frame qua gossip
-    pub async fn publish_frame(&self, sender: &GosipSender, frame: &MediaFrame) -> Result<()> {
+    /// Publish frame to gossip cluster
+    pub async fn publish_frame(&self, sender: &GossipSender, frame: &MediaFrame) -> Result<()> {
         sender.broadcast(frame.to_bytes().into()).await?;
         Ok(())
     }
 
-    /// Spawn task để handle incoming gossip messages
+    // spawn task to handle incoming gossip messages
     async fn spawn_gossip_receiver(&self, topic: TopicId, mut receiver: GossipReceiver) {
         tokio::spawn(async move {
             while let Ok(Some(event)) = receiver.try_next().await {
@@ -205,12 +226,12 @@ impl GossipNode {
         });
     }
 
-    /// Loop để forward gossip events tới broadcast channel
-    async fn gossip_receiver_loop(mut receiver: GossipReceiver, tx: broadcast::Sender<MediaFrame>) {
+    /// handle received gossip messages and broadcast to subscribers
+    async fn gossip_receiver_loop(mut receiver: GossipReceiver, tx: BroadcastSender<MediaFrame>) {
         while let Ok(Some(event)) = receiver.try_next().await {
             if let Event::Received(msg) = event {
                 if let Ok(frame) = MediaFrame::from_bytes(&msg.content) {
-                    let _ = tx.send(frame);
+                    let _ = tx.try_broadcast(frame);
                 }
             }
         }
@@ -228,7 +249,7 @@ pub struct MediaService {
 
 pub struct StreamHandle {
     pub sender: Option<GossipSender>,
-    pub receiver: Option<broadcast::Receiver<MediaFrame>>,
+    pub receiver: Option<BroadcastReceiver<MediaFrame>>,
 }
 
 impl MediaService {
@@ -247,7 +268,7 @@ impl MediaService {
     ) -> Result<IngestHandle> {
         let sender = self.gossip_node.join_as_publisher(&stream_id, peer_nodes).await?;
 
-        let (tx, rx) = mpsc::channel(10);
+        let (_tx, rx) = mpsc::channel(10);
 
         {
             let mut streams = self.active_streams.write().await;
@@ -309,74 +330,109 @@ pub struct IngestHandle {
 
 pub struct SubscribeHandle {
     pub stream_id: String,
-    pub rx: broadcast::Receiver<MediaFrame>,
+    pub rx: BroadcastReceiver<MediaFrame>,
 }
 
 // ============================================================================
 // EXAMPLE USAGE
 // ============================================================================
 
+#[derive(Parser, Debug)]
+struct Args {
+    /// secret key to derive our node id from.
+    #[clap(long)]
+    nn: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // ===== INGEST SERVER (VPS 1) =====
+    let args = Args::parse();
+
     let ingest_secret = SecretKey::generate(&mut rand::rng());
-    let ingest_node = Arc::new(GossipNode::new(ingest_secret, 11111).await?);
-    let ingest_service = MediaService::new(ingest_node.clone());
+    let ingest_node = Arc::new(GossipNode::new(ingest_secret, 0).await?);
+    match args.nn.as_str() {
+        "1" => {
+            println!("> Starting Ingest Server (VPS 1)");
+            // ===== INGEST SERVER (VPS 1) =====
+            let ingest_service = MediaService::new(ingest_node.clone());
 
-    // Start ingest
-    let mut ingest_handle = ingest_service.start_ingest("my-stream".to_string(), vec![]).await?;
+            // Start ingest
+            let _ingest_handle = ingest_service.start_ingest(
+                "my-stream".to_string(),
+                vec![]
+            ).await?;
+            println!("> Ingest service started for stream 'my-stream'");
+            // Simulate WebTransport/WebRTC receiving frames from client publisher
+            tokio::spawn({
+                let service = ingest_service.clone();
+                println!("> [Ingest] Simulating frame ingestion...");
+                async move {
+                    for frame_num in 0..10 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // Simulate WebTransport/WebRTC receiving frames from client publisher
-    tokio::spawn({
-        let service = ingest_service.clone();
-        async move {
-            for frame_num in 0..10 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        let frame = MediaFrame::new(
+                            "my-stream".to_string(),
+                            frame_num,
+                            vec![42u8; 100]
+                        );
 
-                let frame = MediaFrame::new("my-stream".to_string(), frame_num, vec![42u8; 100]);
+                        println!(
+                            "> [Ingest] Received frame: stream={}, frame={}",
+                            frame.stream_id,
+                            frame.frame_num
+                        );
 
-                if let Err(e) = service.send_frame("my-stream", frame).await {
-                    eprintln!("Error sending frame: {}", e);
+                        if let Err(e) = service.send_frame("my-stream", frame).await {
+                            eprintln!("Error sending frame: {}", e);
+                        }
+                    }
                 }
-            }
+            });
         }
-    });
+        "2" => {
+            println!("> Starting Edge Server (VPS 2)");
+            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+            let edge_secret = SecretKey::generate(&mut rand::rng());
+            let edge_node = Arc::new(GossipNode::new(edge_secret, 22222).await?);
+            let edge_service = MediaService::new(edge_node.clone());
+
+            // Subscribe
+            let sub_handle = edge_service.subscribe(
+                "my-stream".to_string(),
+                ingest_node.node_addr()
+            ).await?;
+
+            // Simulate client receiving frames via WebTransport/WebRTC
+            tokio::spawn({
+                let mut handle = sub_handle;
+                async move {
+                    for _ in 0..10 {
+                        match handle.rx.recv().await {
+                            Ok(frame) => {
+                                println!(
+                                    "> [Client] Received: stream={}, frame={}, size={} bytes",
+                                    frame.stream_id,
+                                    frame.frame_num,
+                                    frame.data.len()
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("> [Client] Error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        _ => {
+            println!("Please specify --nn 1 for Ingest Server or --nn 2 for Edge Server");
+            return Ok(());
+        }
+    }
 
     // ===== EDGE SERVER (VPS 2) =====
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-
-    let edge_secret = SecretKey::generate(&mut rand::rng());
-    let edge_node = Arc::new(GossipNode::new(edge_secret, 22222).await?);
-    let edge_service = MediaService::new(edge_node.clone());
-
-    // Subscribe
-    let mut sub_handle = edge_service.subscribe(
-        "my-stream".to_string(),
-        ingest_node.node_addr()
-    ).await?;
-
-    // Simulate client receiving frames via WebTransport/WebRTC
-    tokio::spawn({
-        let mut handle = sub_handle;
-        async move {
-            for _ in 0..10 {
-                match handle.rx.recv().await {
-                    Ok(frame) => {
-                        println!(
-                            "> [Client] Received: stream={}, frame={}, size={} bytes",
-                            frame.stream_id,
-                            frame.frame_num,
-                            frame.data.len()
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("> [Client] Error: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    });
 
     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
     Ok(())
