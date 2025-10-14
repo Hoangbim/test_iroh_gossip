@@ -108,11 +108,8 @@ async fn main() -> Result<()> {
 
     // print a ticket that includes our own node id and endpoint addresses
     let ticket = {
-        // Get our address information, includes our
-        // `NodeId`, our `RelayUrl`, and any direct
-        // addresses.
         let me = endpoint.node_addr();
-        let nodes = vec![me];
+        let nodes = nodes.iter().cloned().chain([me]).collect();
         Ticket { topic, nodes }
     };
     println!("> ticket to join us: {ticket}");
@@ -125,15 +122,21 @@ async fn main() -> Result<()> {
     if nodes.is_empty() {
         println!("> waiting for nodes to join us...");
     } else {
-        println!("> trying to connect to {} nodes...", nodes.len());
+        // println!("> trying to connect to {} nodes...", nodes.len());
+        // // add the peer addrs from the ticket to our endpoint's addressbook so that they can be dialed
+        // for node in nodes.into_iter() {
+        //     // endpoint.add_node_addr_with_source(node, "app")?;
+        //     match endpoint.connect(node.node_id, iroh_gossip::ALPN).await {
+        //         Ok(_) => println!("> Successfully connected to node {}", node.node_id.fmt_short()),
+        //         Err(err) =>
+        //             println!("> Failed to connect to node {}: {:?}", node.node_id.fmt_short(), err),
+        //     }
+        // }
+
+        println!("> trying to connect to {} peers...", nodes.len());
         // add the peer addrs from the ticket to our endpoint's addressbook so that they can be dialed
         for node in nodes.into_iter() {
-            // endpoint.add_node_addr_with_source(node, "app")?;
-            match endpoint.connect(node.node_id, iroh_gossip::ALPN).await {
-                Ok(_) => println!("> Successfully connected to node {}", node.node_id.fmt_short()),
-                Err(err) =>
-                    println!("> Failed to connect to node {}: {:?}", node.node_id.fmt_short(), err),
-            }
+            static_provider.add_node_info(node);
         }
     }
     let (sender, receiver) = gossip.subscribe_and_join(topic, node_ids).await?.split();
