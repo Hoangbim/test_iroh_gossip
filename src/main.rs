@@ -93,13 +93,13 @@ async fn main() -> Result<()> {
     // create a static provider to pass in node addresses to
     let static_provider = StaticProvider::new();
 
-    // let endpoint = Endpoint::builder().discovery_n0().bind().await?;
-    let endpoint = Endpoint::builder()
-        .secret_key(secret_key)
-        .add_discovery(static_provider.clone())
-        .relay_mode(relay_mode.clone())
-        .bind_addr_v4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.bind_port))
-        .bind().await?;
+    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    // let endpoint = Endpoint::builder()
+    //     .secret_key(secret_key)
+    //     .add_discovery(static_provider.clone())
+    //     .relay_mode(relay_mode.clone())
+    //     .bind_addr_v4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.bind_port))
+    //     .bind().await?;
 
     println!("> our node id: {}", endpoint.node_id());
     let gossip = Gossip::builder().spawn(endpoint.clone());
