@@ -1,8 +1,17 @@
-use std::{ collections::HashMap, fmt, str::FromStr };
+use std::{ collections::HashMap, fmt, net::{ Ipv4Addr, SocketAddrV4 }, str::FromStr };
 use anyhow::Result;
 use clap::Parser;
 use futures_lite::StreamExt;
-use iroh::{ protocol::Router, Endpoint, NodeAddr, NodeId };
+use iroh::{
+    discovery::static_provider::StaticProvider,
+    protocol::Router,
+    Endpoint,
+    NodeAddr,
+    NodeId,
+    RelayMode,
+    RelayUrl,
+    SecretKey,
+};
 use iroh_gossip::{ net::{ Gossip }, proto::TopicId, api::{ Event, GossipReceiver } };
 use serde::{ Deserialize, Serialize };
 
@@ -15,6 +24,15 @@ use serde::{ Deserialize, Serialize };
 /// By default, we use the default n0 discovery services to dial by `NodeId`.
 #[derive(Parser, Debug)]
 struct Args {
+    /// secret key to derive our node id from.
+    #[clap(long)]
+    secret_key: Option<String>,
+    /// Set a custom relay server. By default, the relay server hosted by n0 will be used.
+    #[clap(short, long)]
+    relay: Option<RelayUrl>,
+    /// Disable relay completely.
+    #[clap(long)]
+    no_relay: bool,
     /// Set your nickname.
     #[clap(short, long)]
     name: Option<String>,
@@ -54,7 +72,32 @@ async fn main() -> Result<()> {
         }
     };
 
-    let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    // parse or generate our secret key
+    let secret_key = match args.secret_key {
+        None => SecretKey::generate(&mut rand::rng()),
+        Some(key) => key.parse()?,
+    };
+    println!("> our secret key: {}", data_encoding::HEXLOWER.encode(&secret_key.to_bytes()));
+
+    // configure our relay map
+    let relay_mode = match (args.no_relay, args.relay) {
+        (false, None) => RelayMode::Default,
+        (false, Some(url)) => RelayMode::Custom(url.into()),
+        (true, None) => RelayMode::Disabled,
+        (true, Some(_)) => { unreachable!() }
+    };
+    println!("> using relay servers: {}", fmt_relay_mode(&relay_mode));
+
+    // create a static provider to pass in node addresses to
+    let static_provider = StaticProvider::new();
+
+    // let endpoint = Endpoint::builder().discovery_n0().bind().await?;
+    let endpoint = Endpoint::builder()
+        .secret_key(secret_key)
+        .add_discovery(static_provider.clone())
+        .relay_mode(relay_mode.clone())
+        .bind_addr_v4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.bind_port))
+        .bind().await?;
 
     println!("> our node id: {}", endpoint.node_id());
     let gossip = Gossip::builder().spawn(endpoint.clone());
@@ -250,5 +293,19 @@ impl FromStr for Ticket {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let bytes = data_encoding::BASE32_NOPAD.decode(s.to_ascii_uppercase().as_bytes())?;
         Self::from_bytes(&bytes)
+    }
+}
+
+fn fmt_relay_mode(relay_mode: &RelayMode) -> String {
+    match relay_mode {
+        RelayMode::Disabled => "None".to_string(),
+        RelayMode::Default => "Default Relay (production) servers".to_string(),
+        RelayMode::Staging => "Default Relay (staging) servers".to_string(),
+        RelayMode::Custom(map) =>
+            map
+                .urls()
+                .map(|url| url.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
     }
 }
