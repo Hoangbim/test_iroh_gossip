@@ -329,6 +329,7 @@ use async_broadcast::{
     Receiver as BroadcastReceiver,
     Sender as BroadcastSender,
 };
+use clap::Parser;
 
 // ============================================================================
 // MEDIA FRAME
@@ -631,67 +632,95 @@ pub struct SubscribeHandle {
 // EXAMPLE USAGE
 // ============================================================================
 
+#[derive(Parser, Debug)]
+struct Args {
+    /// secret key to derive our node id from.
+    #[clap(long)]
+    nn: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // ===== INGEST SERVER (VPS 1) =====
+    let args = Args::parse();
+
     let ingest_secret = SecretKey::generate(&mut rand::rng());
     let ingest_node = Arc::new(GossipNode::new(ingest_secret, 11111).await?);
-    let ingest_service = MediaService::new(ingest_node.clone());
+    match args.nn.as_str() {
+        "1" => {
+            println!("> Starting Ingest Server (VPS 1)");
+            // ===== INGEST SERVER (VPS 1) =====
+            let ingest_service = MediaService::new(ingest_node.clone());
 
-    // Start ingest
-    let _ingest_handle = ingest_service.start_ingest("my-stream".to_string(), vec![]).await?;
+            // Start ingest
+            let _ingest_handle = ingest_service.start_ingest(
+                "my-stream".to_string(),
+                vec![]
+            ).await?;
 
-    // Simulate WebTransport/WebRTC receiving frames from client publisher
-    tokio::spawn({
-        let service = ingest_service.clone();
-        async move {
-            for frame_num in 0..10 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // Simulate WebTransport/WebRTC receiving frames from client publisher
+            tokio::spawn({
+                let service = ingest_service.clone();
+                async move {
+                    for frame_num in 0..10 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                let frame = MediaFrame::new("my-stream".to_string(), frame_num, vec![42u8; 100]);
+                        let frame = MediaFrame::new(
+                            "my-stream".to_string(),
+                            frame_num,
+                            vec![42u8; 100]
+                        );
 
-                if let Err(e) = service.send_frame("my-stream", frame).await {
-                    eprintln!("Error sending frame: {}", e);
+                        if let Err(e) = service.send_frame("my-stream", frame).await {
+                            eprintln!("Error sending frame: {}", e);
+                        }
+                    }
                 }
-            }
+            });
         }
-    });
+        "2" => {
+            println!("> Starting Edge Server (VPS 2)");
+            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+            let edge_secret = SecretKey::generate(&mut rand::rng());
+            let edge_node = Arc::new(GossipNode::new(edge_secret, 22222).await?);
+            let edge_service = MediaService::new(edge_node.clone());
+
+            // Subscribe
+            let sub_handle = edge_service.subscribe(
+                "my-stream".to_string(),
+                ingest_node.node_addr()
+            ).await?;
+
+            // Simulate client receiving frames via WebTransport/WebRTC
+            tokio::spawn({
+                let mut handle = sub_handle;
+                async move {
+                    for _ in 0..10 {
+                        match handle.rx.recv().await {
+                            Ok(frame) => {
+                                println!(
+                                    "> [Client] Received: stream={}, frame={}, size={} bytes",
+                                    frame.stream_id,
+                                    frame.frame_num,
+                                    frame.data.len()
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("> [Client] Error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        _ => {
+            println!("Please specify --nn 1 for Ingest Server or --nn 2 for Edge Server");
+            return Ok(());
+        }
+    }
 
     // ===== EDGE SERVER (VPS 2) =====
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-
-    let edge_secret = SecretKey::generate(&mut rand::rng());
-    let edge_node = Arc::new(GossipNode::new(edge_secret, 22222).await?);
-    let edge_service = MediaService::new(edge_node.clone());
-
-    // Subscribe
-    let sub_handle = edge_service.subscribe(
-        "my-stream".to_string(),
-        ingest_node.node_addr()
-    ).await?;
-
-    // Simulate client receiving frames via WebTransport/WebRTC
-    tokio::spawn({
-        let mut handle = sub_handle;
-        async move {
-            for _ in 0..10 {
-                match handle.rx.recv().await {
-                    Ok(frame) => {
-                        println!(
-                            "> [Client] Received: stream={}, frame={}, size={} bytes",
-                            frame.stream_id,
-                            frame.frame_num,
-                            frame.data.len()
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("> [Client] Error: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    });
 
     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
     Ok(())
