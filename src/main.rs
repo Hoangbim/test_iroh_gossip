@@ -12,8 +12,10 @@ use iroh::{
     RelayUrl,
     SecretKey,
 };
-use iroh_gossip::{ net::{ Gossip }, proto::TopicId, api::{ Event, GossipReceiver } };
+use iroh_gossip::{ api::{ Event, GossipReceiver }, net::Gossip, proto::TopicId };
 use serde::{ Deserialize, Serialize };
+
+use iroh_gossip::net::GOSSIP_ALPN;
 
 /// Chat over iroh-gossip
 ///
@@ -102,9 +104,7 @@ async fn main() -> Result<()> {
     println!("> our node id: {}", endpoint.node_id());
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
-    let router = Router::builder(endpoint.clone())
-        .accept(iroh_gossip::ALPN, gossip.clone())
-        .spawn();
+    let router = Router::builder(endpoint.clone()).accept(GOSSIP_ALPN, gossip.clone()).spawn();
 
     // print a ticket that includes our own node id and endpoint addresses
     let ticket = {
