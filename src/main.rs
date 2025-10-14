@@ -85,7 +85,12 @@ async fn main() -> Result<()> {
         println!("> trying to connect to {} nodes...", nodes.len());
         // add the peer addrs from the ticket to our endpoint's addressbook so that they can be dialed
         for node in nodes.into_iter() {
-            endpoint.add_node_addr_with_source(node, "app")?;
+            // endpoint.add_node_addr_with_source(node, "app")?;
+            match endpoint.connect(node.node_id, iroh_gossip::ALPN).await {
+                Ok(_) => println!("> Successfully connected to node {}", node.node_id.fmt_short()),
+                Err(err) =>
+                    println!("> Failed to connect to node {}: {:?}", node.node_id.fmt_short(), err),
+            }
         }
     }
     let (sender, receiver) = gossip.subscribe_and_join(topic, node_ids).await?.split();
