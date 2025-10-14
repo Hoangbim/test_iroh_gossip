@@ -1,5 +1,5 @@
 [package]
-name = "iroh_gossip"
+name = "iroh_gossip_node"
 version = "0.1.0"
 edition = "2024"
 
@@ -17,5 +17,7 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 snafu = { version = "0.8.5" }
+blake3 = "1.8.2"
+async-broadcast = "0.7.2"
 
 
