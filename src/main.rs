@@ -99,7 +99,8 @@ async fn main() -> Result<()> {
     let endpoint = Endpoint::builder()
         .secret_key(secret_key)
         .add_discovery(static_provider.clone())
-        .relay_mode(relay_mode.clone())
+        .relay_mode(RelayMode::Disabled)
+        // .relay_mode(relay_mode.clone())
         .bind_addr_v4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.bind_port))
         .bind().await?;
 
