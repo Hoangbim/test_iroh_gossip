@@ -23,4 +23,7 @@ async-broadcast = "0.7.2"
 [[bin]]
 name = "gossip_node"
 path = "src/gossip_node.rs"
+[[bin]]
+name = "main"
+path = "src/main.rs"
 

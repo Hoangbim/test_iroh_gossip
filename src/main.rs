@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
     println!("> our node id: {}", endpoint.node_id());
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
-    if !matches!(relay_mode, RelayMode::Disabled) {
+    if !matches!(relay_mode, RelayMode::Default) {
         // if we are expecting a relay, wait until we get a home relay
         // before moving on
         endpoint.online().await;
