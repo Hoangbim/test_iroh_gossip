@@ -367,7 +367,7 @@ async fn main() -> Result<()> {
                 let service = ingest_service.clone();
                 println!("> [Ingest] Simulating frame ingestion...");
                 async move {
-                    for frame_num in 0..10 {
+                    for frame_num in 0..100 {
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
                         let frame = MediaFrame::new(
@@ -407,7 +407,7 @@ async fn main() -> Result<()> {
             tokio::spawn({
                 let mut handle = sub_handle;
                 async move {
-                    for _ in 0..10 {
+                    for _ in 0..100 {
                         match handle.rx.recv().await {
                             Ok(frame) => {
                                 println!(
