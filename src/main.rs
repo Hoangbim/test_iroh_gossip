@@ -106,11 +106,11 @@ async fn main() -> Result<()> {
     println!("> our node id: {}", endpoint.node_id());
     let gossip = Gossip::builder().spawn(endpoint.clone());
 
-    if !matches!(relay_mode, RelayMode::Default) {
-        // if we are expecting a relay, wait until we get a home relay
-        // before moving on
-        endpoint.online().await;
-    }
+    // if !matches!(relay_mode, RelayMode::Default) {
+    // if we are expecting a relay, wait until we get a home relay
+    // before moving on
+    endpoint.online().await;
+    // }
 
     // print a ticket that includes our own node id and endpoint addresses
     let ticket = {
